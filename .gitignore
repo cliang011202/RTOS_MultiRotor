@@ -1,0 +1,19 @@
+# ── Compiled build artifacts ──────────────────────────────────────────────────
+Debug/*.elf
+Debug/*.bin
+Debug/*.hex
+Debug/*.map
+Debug/*.list
+Debug/*.lst
+Debug/objects.list
+
+# Object files, dependency files, stack usage reports (in all subdirs)
+**/*.o
+**/*.d
+**/*.su
+
+# ── STM32CubeIDE / Eclipse workspace settings (machine-specific) ───────────────
+.settings/
+
+# ── Claude Code local settings ────────────────────────────────────────────────
+.claude/
