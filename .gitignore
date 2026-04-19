@@ -7,10 +7,11 @@ Debug/*.list
 Debug/*.lst
 Debug/objects.list
 
-# Object files, dependency files, stack usage reports (in all subdirs)
+# Object files, dependency files, stack usage reports, cyclomatic complexity reports
 **/*.o
 **/*.d
 **/*.su
+**/*.cyclo
 
 # ── STM32CubeIDE / Eclipse workspace settings (machine-specific) ───────────────
 .settings/

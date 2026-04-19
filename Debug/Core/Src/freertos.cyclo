@@ -1,4 +1,0 @@
-../Core/Src/freertos.c:89:6:MX_FREERTOS_Init	1
-../Core/Src/freertos.c:137:6:StartDefaultTask	1
-../Core/Src/freertos.c:157:6:StartudpRxTask	1
-../Core/Src/freertos.c:175:6:StartpwmCtrlTask	1
