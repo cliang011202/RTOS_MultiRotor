@@ -27,6 +27,7 @@ SUBDIRS := \
 Core/Src \
 Core/Startup \
 Drivers/BSP/Components/lan8742 \
+Drivers/BSP/Components/yt8512c \
 Drivers/STM32H7xx_HAL_Driver/Src \
 LWIP/App \
 LWIP/Target \
