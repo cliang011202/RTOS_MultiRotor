@@ -25,7 +25,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "pwm_ctrl.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -175,10 +175,17 @@ void StartudpRxTask(void *argument)
 void StartpwmCtrlTask(void *argument)
 {
   /* USER CODE BEGIN StartpwmCtrlTask */
-  /* Infinite loop */
+  PWM_Init();
+  PWM_ArmESC();   /* 输出 1500 µs 中性油门，等待 ESC 解锁 */
+
+  /* 控制循环：等待逆运动学结果（Queue 待实现），更新 7 路脉宽 */
   for(;;)
   {
-    osDelay(1);
+    /* TODO: xQueueReceive(xLoadQueue, &load, portMAX_DELAY);
+     *       inverse_kinematics(&load, pulses);
+     *       PWM_SetAll(pulses);
+     */
+    osDelay(20);  /* 占位：50 Hz 节拍，待 Queue 实现后替换 */
   }
   /* USER CODE END StartpwmCtrlTask */
 }
