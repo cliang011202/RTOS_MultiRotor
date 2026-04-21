@@ -25,7 +25,9 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include <stdio.h>
 #include "pwm_ctrl.h"
+#include "lwip.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -139,10 +141,20 @@ void StartDefaultTask(void *argument)
   /* init code for LWIP */
   MX_LWIP_Init();
   /* USER CODE BEGIN StartDefaultTask */
-  /* Infinite loop */
+  /* Wait up to 5 s for Ethernet link (ethernet_link_thread polls PHY every 100 ms) */
+  for (int i = 0; i < 50; i++) {
+      if (netif_is_link_up(&gnetif)) break;
+      osDelay(100);
+  }
+
+  if (netif_is_link_up(&gnetif))
+      printf("[ETH] Link UP  IP=%s\r\n", ip4addr_ntoa(netif_ip4_addr(&gnetif)));
+  else
+      printf("[ETH] Link DOWN after 5 s\r\n");
+
   for(;;)
   {
-    osDelay(1);
+    osDelay(1000);
   }
   /* USER CODE END StartDefaultTask */
 }
@@ -175,8 +187,32 @@ void StartudpRxTask(void *argument)
 void StartpwmCtrlTask(void *argument)
 {
   /* USER CODE BEGIN StartpwmCtrlTask */
+  /* Verify TIM1 config before starting PWM — expected: PSC=99 ARR=19999 CCR1=1500 */
+  printf("[PWM] TIM1 PSC=%lu  ARR=%lu  CCR1=%lu\r\n",
+         TIM1->PSC, TIM1->ARR, TIM1->CCR1);
+
   PWM_Init();
+  printf("[PWM] Init done — 7 channels active\r\n");
   PWM_ArmESC();   /* 输出 1500 µs 中性油门，等待 ESC 解锁 */
+  printf("[PWM] ESC armed\r\n");
+
+  /* ── 扫频验证：给示波器一个可观测的变化波形 ──────────────────── */
+  printf("[PWM] Sweep start: 1000->2000->1500 us\r\n");
+  uint16_t sweep[PWM_MOTOR_COUNT];
+  for (uint16_t p = 1000; p <= 2000; p += 10) {
+      for (int j = 0; j < PWM_MOTOR_COUNT; j++) sweep[j] = p;
+      PWM_SetAll(sweep);
+      osDelay(20);
+  }
+  for (uint16_t p = 2000; p >= 1000; p -= 10) {
+      for (int j = 0; j < PWM_MOTOR_COUNT; j++) sweep[j] = p;
+      PWM_SetAll(sweep);
+      osDelay(20);
+  }
+  for (int j = 0; j < PWM_MOTOR_COUNT; j++) sweep[j] = PWM_PULSE_NEUTRAL_US;
+  PWM_SetAll(sweep);
+  printf("[PWM] Sweep done -- back to neutral 1500 us\r\n");
+  /* ────────────────────────────────────────────────────────────── */
 
   /* 控制循环：等待逆运动学结果（Queue 待实现），更新 7 路脉宽 */
   for(;;)

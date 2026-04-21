@@ -39,6 +39,7 @@ Device configuration is managed via **STM32CubeMX** — open `RTOS_MultiRotor.io
 
 **Key peripherals:**
 - **TIM1 / TIM8**: 7 PWM channels at 50 Hz (20 ms period) for ESC motor control. Pulse = 1000–2000 µs; neutral = 1500.
+- **USART1**: Debug serial, PA9 (TX) / PA10 (RX) — see "Debug Serial" section below.
 - **I2C** at 400 kHz: SCL = PH4, SDA = PH5. Shared bus for IMU, PCF8574, and other sensors.
 - **ETH + YT8512C PHY**: Ethernet MAC for UDP telemetry/command (see below).
 - **Clock**: 25 MHz HSE → PLL → 200 MHz system clock.
@@ -68,6 +69,25 @@ STM32H743 has a built-in Ethernet MAC; the external PHY is **YT8512C** connected
 - **PA2**: ETH_MDIO ↔ USART2_TX
 - **PB11**: ETH_TX_EN ↔ USART3_RX
 - **PB12**: PCF8574 IIC_INT ↔ 1-Wire temperature/humidity sensor DQ
+
+### Debug Serial (USART1)
+
+板载 **CH340** USB 转串口芯片通过 **P11 跳线排** 连接到 STM32 的 USART1：
+
+| 信号 | MCU Pin | 说明 |
+|------|---------|------|
+| USART1_TX | PA9 | STM32 发送 → CH340 RXD |
+| USART1_RX | PA10 | STM32 接收 ← CH340 TXD |
+
+P11 跳帽短接 = USB 串口直通；拔掉跳帽可改接外部 TTL 设备，或把开发板当 USB 转 TTL 使用。
+
+**调试 printf 路由**：`Core/Src/syscalls.c` 的 `__io_putchar` 应调用 `HAL_UART_Transmit(&huart1, ...)` 而非 ITM（SWV 在部分环境下不可用）。
+
+**⚠ 引脚冲突（重要）**：PA9 = TIM1_CH2（电机 2），PA10 = TIM1_CH3（电机 3）。启用 USART1 调试时，**必须**在 CubeMX 中把这两路 PWM 重映射到空闲引脚：
+- TIM1_CH2 → **PE11**
+- TIM1_CH3 → **PE13**
+
+重映射后，电机 2/3 的 ESC 信号线改接 PE11/PE13；PA9/PA10 专用于 USB 串口调试。
 
 ### PCF8574 IIC IO Expander
 
@@ -127,4 +147,5 @@ Each peripheral has its own `MX_XXX_Init()` function called from `main.c` before
 - **MPU regions**: RAM_D2 (0x30000000, 256 KB) is marked non-executable/non-cacheable for safe DMA use. Do not place code there.
 - **I-Cache and D-Cache** are enabled at startup. When using DMA, ensure buffers are cache-aligned or use `SCB_CleanDCache_by_Addr()` / `SCB_InvalidateDCache_by_Addr()` as appropriate.
 - **PWM neutral position**: Timers are initialized with `Pulse = 1500` (1.5 ms). ESCs typically arm with a fixed neutral pulse before varying the signal.
-- **Pin conflicts**: PA2 and PB11 are shared between ETH and UART peripherals — do not enable both simultaneously.
+- **Pin conflicts**: PA2/PB11 shared with ETH; PA9/PA10 shared between USART1 and TIM1 CH2/CH3 — remap TIM1 CH2→PE11, CH3→PE13 before enabling USART1 debug.
+- **printf debug**: 使用 USART1（USB 串口，CH340，P11 跳帽）而非 ITM/SWV；`syscalls.c` 中 `__io_putchar` 调用 `HAL_UART_Transmit(&huart1, ...)`。

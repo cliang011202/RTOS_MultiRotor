@@ -35,6 +35,14 @@
 extern int __io_putchar(int ch) __attribute__((weak));
 extern int __io_getchar(void) __attribute__((weak));
 
+/* Route printf to SWO/ITM stimulus port 0 (debug cable, no extra UART needed) */
+#include "stm32h7xx.h"
+int __io_putchar(int ch)
+{
+    ITM_SendChar((uint32_t)ch);
+    return ch;
+}
+
 
 char *__env[1] = { 0 };
 char **environ = __env;

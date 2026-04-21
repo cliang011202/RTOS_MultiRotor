@@ -54,7 +54,6 @@ int32_t YT8512C_Init(yt8512c_Object_t *pObj)
 {
     uint32_t regval = 0;
     uint32_t addr;
-    int32_t  status = YT8512C_STATUS_ERROR;
     uint32_t tickstart;
 
     if (pObj->Is_Initialized)
@@ -85,7 +84,6 @@ int32_t YT8512C_Init(yt8512c_Object_t *pObj)
         if (((regval >> 4) & 0x3FU) == 0x12U)
         {
             pObj->DevAddr = addr;
-            status = YT8512C_STATUS_OK;
             break;
         }
     }
