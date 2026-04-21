@@ -28,7 +28,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "pcf8574.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -110,7 +110,10 @@ int main(void)
   MX_TIM8_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
-
+  /* PCF8574 上电默认全高(0xFF)，P0=BEEP 会响；在调度器启动前立刻写一次使其静音 */
+  { static PCF8574_Object_t pcf_early;
+    int32_t r = PCF8574_Init(&pcf_early, &hi2c2, PCF8574_I2C_ADDR);
+    printf("[PCF] Init %s\r\n", r == 0 ? "OK" : "FAIL"); }
   /* USER CODE END 2 */
 
   /* Init scheduler */

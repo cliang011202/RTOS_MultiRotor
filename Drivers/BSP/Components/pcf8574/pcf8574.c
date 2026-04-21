@@ -135,10 +135,11 @@ int32_t PCF8574_ETH_Reset(PCF8574_Object_t *pObj)
  */
 void PCF8574_BEEP_Set(PCF8574_Object_t *pObj, uint8_t on)
 {
+    /* PNP 反相：P0=0 响，P0=1 静音 */
     if (on)
-        PCF8574_SetPin(pObj, PCF8574_PIN_BEEP);
-    else
         PCF8574_ResetPin(pObj, PCF8574_PIN_BEEP);
+    else
+        PCF8574_SetPin(pObj, PCF8574_PIN_BEEP);
 }
 
 /* ── RS485 方向控制 ─────────────────────────────────────────────────────────
