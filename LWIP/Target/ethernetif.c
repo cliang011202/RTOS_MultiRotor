@@ -26,15 +26,15 @@
 #include "netif/etharp.h"
 #include "lwip/ethip6.h"
 #include "ethernetif.h"
-#include "yt8512c.h"
-#include "pcf8574.h"
+#include "lan8742.h"
 #include <string.h>
 #include "cmsis_os.h"
 #include "lwip/tcpip.h"
 
 /* Within 'USER CODE' section, code will be kept by default at each generation */
 /* USER CODE BEGIN 0 */
-
+#include "yt8512c.h"
+#include "pcf8574.h"
 /* USER CODE END 0 */
 
 /* Private define ------------------------------------------------------------*/
@@ -150,16 +150,19 @@ int32_t ETH_PHY_IO_ReadReg(uint32_t DevAddr, uint32_t RegAddr, uint32_t *pRegVal
 int32_t ETH_PHY_IO_WriteReg(uint32_t DevAddr, uint32_t RegAddr, uint32_t RegVal);
 int32_t ETH_PHY_IO_GetTick(void);
 
-yt8512c_Object_t YT8512C;
-yt8512c_IOCtx_t  YT8512C_IOCtx = {ETH_PHY_IO_Init,
-                                   ETH_PHY_IO_DeInit,
-                                   ETH_PHY_IO_WriteReg,
-                                   ETH_PHY_IO_ReadReg,
-                                   ETH_PHY_IO_GetTick};
+lan8742_Object_t LAN8742;
+lan8742_IOCtx_t  LAN8742_IOCtx = {ETH_PHY_IO_Init,
+                                  ETH_PHY_IO_DeInit,
+                                  ETH_PHY_IO_WriteReg,
+                                  ETH_PHY_IO_ReadReg,
+                                  ETH_PHY_IO_GetTick};
 
 /* USER CODE BEGIN 3 */
-/* PCF8574 对象：ETH_PHY_IO_Init 中初始化，用于硬件复位 YT8512C */
 static PCF8574_Object_t PCF8574_Dev;
+static yt8512c_Object_t YT8512C;
+static yt8512c_IOCtx_t  YT8512C_IOCtx = {
+    ETH_PHY_IO_Init, ETH_PHY_IO_DeInit,
+    ETH_PHY_IO_WriteReg, ETH_PHY_IO_ReadReg, ETH_PHY_IO_GetTick};
 /* USER CODE END 3 */
 
 /* Private functions ---------------------------------------------------------*/
@@ -291,13 +294,48 @@ static void low_level_init(struct netif *netif)
 /* USER CODE END OS_THREAD_NEW_CMSIS_RTOS_V2 */
 
 /* USER CODE BEGIN PHY_PRE_CONFIG */
-
+/* YT8512C replaces LAN8742. All PHY init is done here; LAN8742 code below is bypassed. */
+if (hal_eth_init_status == HAL_OK) {
+    extern I2C_HandleTypeDef hi2c2;
+    PCF8574_Init(&PCF8574_Dev, &hi2c2, PCF8574_I2C_ADDR);  /* P7=0: release PHY RESET# */
+    PCF8574_ETH_Reset(&PCF8574_Dev);                         /* pulse RESET# low 10 ms    */
+    HAL_ETH_SetMDIOClockRange(&heth);
+    YT8512C_RegisterBusIO(&YT8512C, &YT8512C_IOCtx);
+    if (YT8512C_Init(&YT8512C) != YT8512C_STATUS_OK) {
+        netif_set_link_down(netif);
+        netif_set_down(netif);
+        return;
+    }
+    PHYLinkState = YT8512C_GetLinkState(&YT8512C);
+    if (PHYLinkState <= YT8512C_STATUS_LINK_DOWN) {
+        netif_set_link_down(netif);
+        netif_set_down(netif);
+    } else {
+        switch (PHYLinkState) {
+        case YT8512C_STATUS_100MBITS_FULLDUPLEX: duplex=ETH_FULLDUPLEX_MODE; speed=ETH_SPEED_100M; break;
+        case YT8512C_STATUS_100MBITS_HALFDUPLEX: duplex=ETH_HALFDUPLEX_MODE; speed=ETH_SPEED_100M; break;
+        case YT8512C_STATUS_10MBITS_FULLDUPLEX:  duplex=ETH_FULLDUPLEX_MODE; speed=ETH_SPEED_10M;  break;
+        case YT8512C_STATUS_10MBITS_HALFDUPLEX:  duplex=ETH_HALFDUPLEX_MODE; speed=ETH_SPEED_10M;  break;
+        default: duplex=ETH_FULLDUPLEX_MODE; speed=ETH_SPEED_100M; break;
+        }
+        HAL_ETH_GetMACConfig(&heth, &MACConf);
+        MACConf.DuplexMode = duplex;
+        MACConf.Speed = speed;
+        HAL_ETH_SetMACConfig(&heth, &MACConf);
+        HAL_ETH_Start_IT(&heth);
+        netif_set_up(netif);
+        netif_set_link_up(netif);
+    }
+    return;  /* LAN8742 code below is superseded */
+} else {
+    Error_Handler();
+}
 /* USER CODE END PHY_PRE_CONFIG */
   /* Set PHY IO functions */
-  YT8512C_RegisterBusIO(&YT8512C, &YT8512C_IOCtx);
+  LAN8742_RegisterBusIO(&LAN8742, &LAN8742_IOCtx);
 
-  /* Initialize the YT8512C ETH PHY */
-  if(YT8512C_Init(&YT8512C) != YT8512C_STATUS_OK)
+  /* Initialize the LAN8742 ETH PHY */
+  if(LAN8742_Init(&LAN8742) != LAN8742_STATUS_OK)
   {
     netif_set_link_down(netif);
     netif_set_down(netif);
@@ -306,10 +344,10 @@ static void low_level_init(struct netif *netif)
 
   if (hal_eth_init_status == HAL_OK)
   {
-    PHYLinkState = YT8512C_GetLinkState(&YT8512C);
+    PHYLinkState = LAN8742_GetLinkState(&LAN8742);
 
     /* Get link state */
-    if(PHYLinkState <= YT8512C_STATUS_LINK_DOWN)
+    if(PHYLinkState <= LAN8742_STATUS_LINK_DOWN)
     {
       netif_set_link_down(netif);
       netif_set_down(netif);
@@ -318,19 +356,19 @@ static void low_level_init(struct netif *netif)
     {
       switch (PHYLinkState)
       {
-      case YT8512C_STATUS_100MBITS_FULLDUPLEX:
+      case LAN8742_STATUS_100MBITS_FULLDUPLEX:
         duplex = ETH_FULLDUPLEX_MODE;
         speed = ETH_SPEED_100M;
         break;
-      case YT8512C_STATUS_100MBITS_HALFDUPLEX:
+      case LAN8742_STATUS_100MBITS_HALFDUPLEX:
         duplex = ETH_HALFDUPLEX_MODE;
         speed = ETH_SPEED_100M;
         break;
-      case YT8512C_STATUS_10MBITS_FULLDUPLEX:
+      case LAN8742_STATUS_10MBITS_FULLDUPLEX:
         duplex = ETH_FULLDUPLEX_MODE;
         speed = ETH_SPEED_10M;
         break;
-      case YT8512C_STATUS_10MBITS_HALFDUPLEX:
+      case LAN8742_STATUS_10MBITS_HALFDUPLEX:
         duplex = ETH_HALFDUPLEX_MODE;
         speed = ETH_SPEED_10M;
         break;
@@ -733,17 +771,6 @@ int32_t ETH_PHY_IO_Init(void)
      in the ETH_MspInit() else it should be done here
   */
 
-  /* 初始化 PCF8574，释放 PHY 复位线（P7=0），并执行一次硬件复位
-   * 为什么在这里初始化？
-   * ETH_PHY_IO_Init 是 YT8512C_RegisterBusIO 注入的 Init 回调，
-   * 在 YT8512C_Init 扫描 MDIO 前会先调用它。
-   * 必须在 MDIO 扫描之前完成 PCF8574_ETH_Reset，
-   * 否则 PHY 仍处于复位状态，MDIO 无响应，扫描失败。
-   */
-  extern I2C_HandleTypeDef hi2c2;
-  PCF8574_Init(&PCF8574_Dev, &hi2c2, PCF8574_I2C_ADDR);
-  PCF8574_ETH_Reset(&PCF8574_Dev);  /* 断言10ms，释放后等50ms让PHY稳定 */
-
   /* Configure the MDIO Clock */
   HAL_ETH_SetMDIOClockRange(&heth);
 
@@ -815,39 +842,66 @@ void ethernet_link_thread(void* argument)
 
   struct netif *netif = (struct netif *) argument;
 /* USER CODE BEGIN ETH link init */
-
+/* YT8512C link monitoring loop — runs forever; LAN8742 loop below is unreachable */
+for (;;) {
+    PHYLinkState = YT8512C_GetLinkState(&YT8512C);
+    linkchanged = 0U;
+    if (netif_is_link_up(netif) && (PHYLinkState <= YT8512C_STATUS_LINK_DOWN)) {
+        HAL_ETH_Stop_IT(&heth);
+        netif_set_down(netif);
+        netif_set_link_down(netif);
+    } else if (!netif_is_link_up(netif) && (PHYLinkState > YT8512C_STATUS_LINK_DOWN)) {
+        switch (PHYLinkState) {
+        case YT8512C_STATUS_100MBITS_FULLDUPLEX: duplex=ETH_FULLDUPLEX_MODE; speed=ETH_SPEED_100M; linkchanged=1; break;
+        case YT8512C_STATUS_100MBITS_HALFDUPLEX: duplex=ETH_HALFDUPLEX_MODE; speed=ETH_SPEED_100M; linkchanged=1; break;
+        case YT8512C_STATUS_10MBITS_FULLDUPLEX:  duplex=ETH_FULLDUPLEX_MODE; speed=ETH_SPEED_10M;  linkchanged=1; break;
+        case YT8512C_STATUS_10MBITS_HALFDUPLEX:  duplex=ETH_HALFDUPLEX_MODE; speed=ETH_SPEED_10M;  linkchanged=1; break;
+        default: break;
+        }
+        if (linkchanged) {
+            HAL_ETH_GetMACConfig(&heth, &MACConf);
+            MACConf.DuplexMode = duplex;
+            MACConf.Speed = speed;
+            HAL_ETH_SetMACConfig(&heth, &MACConf);
+            HAL_ETH_Start_IT(&heth);
+            netif_set_up(netif);
+            netif_set_link_up(netif);
+        }
+    }
+    osDelay(100);
+}
 /* USER CODE END ETH link init */
 
   for(;;)
   {
-  PHYLinkState = YT8512C_GetLinkState(&YT8512C);
+  PHYLinkState = LAN8742_GetLinkState(&LAN8742);
 
-  if(netif_is_link_up(netif) && (PHYLinkState <= YT8512C_STATUS_LINK_DOWN))
+  if(netif_is_link_up(netif) && (PHYLinkState <= LAN8742_STATUS_LINK_DOWN))
   {
     HAL_ETH_Stop_IT(&heth);
     netif_set_down(netif);
     netif_set_link_down(netif);
   }
-  else if(!netif_is_link_up(netif) && (PHYLinkState > YT8512C_STATUS_LINK_DOWN))
+  else if(!netif_is_link_up(netif) && (PHYLinkState > LAN8742_STATUS_LINK_DOWN))
   {
     switch (PHYLinkState)
     {
-    case YT8512C_STATUS_100MBITS_FULLDUPLEX:
+    case LAN8742_STATUS_100MBITS_FULLDUPLEX:
       duplex = ETH_FULLDUPLEX_MODE;
       speed = ETH_SPEED_100M;
       linkchanged = 1;
       break;
-    case YT8512C_STATUS_100MBITS_HALFDUPLEX:
+    case LAN8742_STATUS_100MBITS_HALFDUPLEX:
       duplex = ETH_HALFDUPLEX_MODE;
       speed = ETH_SPEED_100M;
       linkchanged = 1;
       break;
-    case YT8512C_STATUS_10MBITS_FULLDUPLEX:
+    case LAN8742_STATUS_10MBITS_FULLDUPLEX:
       duplex = ETH_FULLDUPLEX_MODE;
       speed = ETH_SPEED_10M;
       linkchanged = 1;
       break;
-    case YT8512C_STATUS_10MBITS_HALFDUPLEX:
+    case LAN8742_STATUS_10MBITS_HALFDUPLEX:
       duplex = ETH_HALFDUPLEX_MODE;
       speed = ETH_SPEED_10M;
       linkchanged = 1;

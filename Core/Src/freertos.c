@@ -28,6 +28,8 @@
 #include <stdio.h>
 #include "pwm_ctrl.h"
 #include "lwip.h"
+#include "lwip/netif.h"
+extern struct netif gnetif;
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/

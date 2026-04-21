@@ -35,11 +35,11 @@
 extern int __io_putchar(int ch) __attribute__((weak));
 extern int __io_getchar(void) __attribute__((weak));
 
-/* Route printf to SWO/ITM stimulus port 0 (debug cable, no extra UART needed) */
-#include "stm32h7xx.h"
+/* Route printf to USART1 (PA9/PA10, USB serial via CH340, P11 jumper) */
+#include "usart.h"
 int __io_putchar(int ch)
 {
-    ITM_SendChar((uint32_t)ch);
+    HAL_UART_Transmit(&huart1, (uint8_t *)&ch, 1, HAL_MAX_DELAY);
     return ch;
 }
 

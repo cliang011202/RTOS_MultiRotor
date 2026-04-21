@@ -16,8 +16,8 @@ typedef struct {
 
 static const MotorChannel_t s_channels[PWM_MOTOR_COUNT] = {
     { &htim1, TIM_CHANNEL_1 },  /* 电机 1 — PE9  */
-    { &htim1, TIM_CHANNEL_2 },  /* 电机 2 — PA9  */
-    { &htim1, TIM_CHANNEL_3 },  /* 电机 3 — PA10 */
+    { &htim1, TIM_CHANNEL_2 },  /* 电机 2 — PE11 */
+    { &htim1, TIM_CHANNEL_3 },  /* 电机 3 — PE13 */
     { &htim1, TIM_CHANNEL_4 },  /* 电机 4 — PA11 */
     { &htim8, TIM_CHANNEL_1 },  /* 电机 5 — PC6  */
     { &htim8, TIM_CHANNEL_2 },  /* 电机 6 — PC7  */
