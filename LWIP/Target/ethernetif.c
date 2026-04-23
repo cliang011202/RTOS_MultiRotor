@@ -33,6 +33,7 @@
 
 /* Within 'USER CODE' section, code will be kept by default at each generation */
 /* USER CODE BEGIN 0 */
+#include <stdio.h>
 #include "yt8512c.h"
 #include "pcf8574.h"
 /* USER CODE END 0 */
@@ -239,7 +240,16 @@ static void low_level_init(struct netif *netif)
   heth.Init.RxBuffLen = 1536;
 
   /* USER CODE BEGIN MACADDRESS */
-
+  /* Reset YT8512C PHY before HAL_ETH_Init so REFCLK is stable when SWR is written.
+   * Hardware: P7 drives RESET# directly (no NPN inverter).
+   *   P7=0 -> RESET# LOW -> PHY reset  |  P7=1 -> RESET# HIGH -> PHY running */
+  {
+    extern I2C_HandleTypeDef hi2c2;
+    static PCF8574_Object_t pcf_eth;
+    PCF8574_Init(&pcf_eth, &hi2c2, PCF8574_I2C_ADDR);  /* INIT_STATE: P7=1, PHY running */
+    PCF8574_ETH_Reset(&pcf_eth);  /* P7=0 (10 ms) -> P7=1 (50 ms PLL lock wait) */
+    printf("[ETH] PHY reset done\r\n");
+  }
   /* USER CODE END MACADDRESS */
 
   hal_eth_init_status = HAL_ETH_Init(&heth);
@@ -295,17 +305,20 @@ static void low_level_init(struct netif *netif)
 
 /* USER CODE BEGIN PHY_PRE_CONFIG */
 /* YT8512C replaces LAN8742. All PHY init is done here; LAN8742 code below is bypassed. */
+printf("[ETH] HAL_ETH_Init %s  ErrorCode=0x%lX  DMAMR=0x%08lX\r\n",
+       hal_eth_init_status == HAL_OK ? "OK" : "FAIL",
+       heth.ErrorCode, ETH->DMAMR);
 if (hal_eth_init_status == HAL_OK) {
-    extern I2C_HandleTypeDef hi2c2;
-    PCF8574_Init(&PCF8574_Dev, &hi2c2, PCF8574_I2C_ADDR);  /* P7=0: release PHY RESET# */
-    PCF8574_ETH_Reset(&PCF8574_Dev);                         /* pulse RESET# low 10 ms    */
     HAL_ETH_SetMDIOClockRange(&heth);
     YT8512C_RegisterBusIO(&YT8512C, &YT8512C_IOCtx);
+    printf("[ETH] YT8512C_Init...\r\n");
     if (YT8512C_Init(&YT8512C) != YT8512C_STATUS_OK) {
+        printf("[ETH] YT8512C_Init FAIL\r\n");
         netif_set_link_down(netif);
         netif_set_down(netif);
         return;
     }
+    printf("[ETH] YT8512C_Init OK\r\n");
     PHYLinkState = YT8512C_GetLinkState(&YT8512C);
     if (PHYLinkState <= YT8512C_STATUS_LINK_DOWN) {
         netif_set_link_down(netif);
@@ -328,7 +341,21 @@ if (hal_eth_init_status == HAL_OK) {
     }
     return;  /* LAN8742 code below is superseded */
 } else {
-    Error_Handler();
+    /* HAL_ETH_Init failed — extended SWR poll: detect if REFCLK ever arrives */
+    if (READ_BIT(ETH->DMAMR, ETH_DMAMR_SWR)) {
+        uint32_t t0 = HAL_GetTick();
+        printf("[ETH] Polling SWR 5s...\r\n");
+        while (READ_BIT(ETH->DMAMR, ETH_DMAMR_SWR)) {
+            if (HAL_GetTick() - t0 > 5000U) { break; }
+        }
+        if (!READ_BIT(ETH->DMAMR, ETH_DMAMR_SWR))
+            printf("[ETH] SWR cleared at %ldms — REFCLK arrived late, increase timeout\r\n",
+                   HAL_GetTick() - t0);
+        else
+            printf("[ETH] SWR stuck 5s — REFCLK absent on PA1 (hardware/polarity issue)\r\n");
+    }
+    netif_set_link_down(netif);
+    netif_set_down(netif);
 }
 /* USER CODE END PHY_PRE_CONFIG */
   /* Set PHY IO functions */

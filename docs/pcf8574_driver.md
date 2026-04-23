@@ -54,21 +54,21 @@ LWIP/Target/ethernetif.c
 | P4 | `PCF8574_PIN_6D_INT` | 六轴 IMU 中断 | 1（输入） | 读取前须置1 |
 | P5 | `PCF8574_PIN_RS485_RE` | RS485 方向控制 | 0（接收） | 0=接收，1=发送 |
 | P6 | `PCF8574_PIN_EXIO` | P3 扩展备用 IO | 1（输入） | 当前未使用 |
-| P7 | `PCF8574_PIN_ETH_RESET` | YT8512C RESET#（经NPN反相）| 0（正常）| **★ 关键** |
+| P7 | `PCF8574_PIN_ETH_RESET` | YT8512C RESET# | 0（正常）| **★ 关键** |
 
-**P7 与 ETH_RESET 的逻辑关系（NPN 反相）：**
+**P7 与 ETH_RESET 的逻辑关系：**
 
 ```
-P7 = 1  →  NPN 导通  →  PHY RESET# = 低  →  PHY 处于复位状态
-P7 = 0  →  NPN 截止  →  PHY RESET# = 高  →  PHY 正常运行
+P7 = 1  →  PHY RESET# = 低  →  PHY 处于复位状态
+P7 = 0  →  PHY RESET# = 高  →  PHY 正常运行,输出 50 MHz REFCLK
 ```
 
 **上电初始状态字节（`PCF8574_INIT_STATE`）：**
 
 ```
 bit7  bit6  bit5  bit4  bit3  bit2  bit1  bit0
-  0     1     0     1     0     1     1     0   = 0x56
- P7=0  P6=1  P5=0  P4=1  P3=0  P2=1  P1=1  P0=0
+  0     1     0     1     0     1     1     0   = 0x57
+ P7=0  P6=1  P5=0  P4=1  P3=0  P2=1  P1=1  P0=1
 ```
 
 ---

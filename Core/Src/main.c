@@ -114,6 +114,10 @@ int main(void)
   { static PCF8574_Object_t pcf_early;
     int32_t r = PCF8574_Init(&pcf_early, &hi2c2, PCF8574_I2C_ADDR);
     printf("[PCF] Init %s\r\n", r == 0 ? "OK" : "FAIL"); }
+  /* YT8512C PLL 锁定并稳定输出 50 MHz REFCLK 约需 70 ms（上电后 RESET# 释放计时）。
+   * HAL_ETH_Init 内部等待 ETH_DMAMR_SWR 清零，STM32H7 该位依赖 REFCLK 稳定。
+   * 在调度器启动前延时 150 ms，确保 REFCLK 就绪，避免 HAL_ETH_Init 超时失败。 */
+  HAL_Delay(300);
   /* USER CODE END 2 */
 
   /* Init scheduler */

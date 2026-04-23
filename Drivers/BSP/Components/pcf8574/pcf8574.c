@@ -21,8 +21,9 @@ static int32_t write_latch(PCF8574_Object_t *pObj)
 /* ── PCF8574_Init ───────────────────────────────────────────────────────────
  * 为什么 Init 要立刻写 INIT_STATE？
  * PCF8574 上电后所有引脚默认为高（0xFF）。
- * P7=1 会经 NPN 反相后驱动 PHY RESET# 为低，使以太网 PHY 一直处于复位状态。
- * 必须在系统启动时尽快将 P7 拉低，否则后续 YT8512C_Init 扫描会找不到 PHY。
+ * P7 直连 YT8512C RESET# 引脚（无反相）：P7=0 = RESET# 低 = PHY 复位。
+ * 上电后 PCF8574 默认全高（0xFF），P7=1 → PHY 正常，但蜂鸣器（P0=1）也安全。
+ * 写入 INIT_STATE(0xD7) 保持 P7=1 并关闭蜂鸣器（P0=1）及其他安全初始值。
  */
 int32_t PCF8574_Init(PCF8574_Object_t *pObj, I2C_HandleTypeDef *hi2c, uint16_t devAddr)
 {
@@ -104,29 +105,27 @@ int32_t PCF8574_ReadPin(PCF8574_Object_t *pObj, uint8_t pin, uint8_t *state)
 /* ── PCF8574_ETH_Reset ──────────────────────────────────────────────────────
  * 对 YT8512C PHY 执行一次硬件复位。
  *
- * 时序：P7=1（NPN 导通 → RESET# 低）→ 等待 ≥10 ms → P7=0（释放）→ 等待稳定。
+ * 硬件确认：P7 直连（无 NPN 反相）YT8512C RESET# 引脚。
+ * 时序：P7=0（RESET# 低，断言复位）→ 等待 ≥10 ms → P7=1（RESET# 高，释放）→ 等待 PLL 锁定。
  * 为什么等 10 ms？YT8512C 数据手册要求 RESET# 低电平持续至少 10 ms。
  * 为什么释放后再等 50 ms？PHY 内部 PLL 和寄存器初始化需要时间，过早访问
  * MDIO 会得到错误读值，导致 YT8512C_Init 找不到 PHY。
- *
- * 此函数使用 HAL_Delay（可在调度器启动前后均可调用）。
- * 若需在 FreeRTOS 任务中减少阻塞，可改为 osDelay，但通常只调用一次，影响不大。
  */
 int32_t PCF8574_ETH_Reset(PCF8574_Object_t *pObj)
 {
     int32_t ret;
 
-    ret = PCF8574_SetPin(pObj, PCF8574_PIN_ETH_RESET);  /* 断言复位 */
+    ret = PCF8574_ResetPin(pObj, PCF8574_PIN_ETH_RESET); /* P7=0：RESET# 低，断言复位 */
     if (ret != PCF8574_STATUS_OK)
         return ret;
 
     HAL_Delay(10);
 
-    ret = PCF8574_ResetPin(pObj, PCF8574_PIN_ETH_RESET); /* 释放复位 */
+    ret = PCF8574_SetPin(pObj, PCF8574_PIN_ETH_RESET);   /* P7=1：RESET# 高，释放复位 */
     if (ret != PCF8574_STATUS_OK)
         return ret;
 
-    HAL_Delay(50);  /* 等待 PHY 内部初始化完成 */
+    HAL_Delay(50);  /* 等待 PHY PLL 锁定并输出稳定 REFCLK */
     return PCF8574_STATUS_OK;
 }
 

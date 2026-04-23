@@ -27,12 +27,15 @@ extern "C" {
 #define PCF8574_PIN_6D_INT      (1U << 4)   /* P4 — 六轴 IMU 中断（输入） */
 #define PCF8574_PIN_RS485_RE    (1U << 5)   /* P5 — RS485 方向控制（0=接收，1=发送） */
 #define PCF8574_PIN_EXIO        (1U << 6)   /* P6 — 备用 IO（P3 扩展口） */
-#define PCF8574_PIN_ETH_RESET   (1U << 7)   /* P7 — PHY 硬件复位（经 NPN 反相）
-                                             * P7=1 → NPN 导通 → RESET# 低 → PHY 复位
-                                             * P7=0 → NPN 截止 → RESET# 高 → PHY 正常 */
+#define PCF8574_PIN_ETH_RESET   (1U << 7)   /* P7 — PHY 硬件复位（直连 RESET#，无反相）
+                                             * P7=1 → RESET# 高 → PHY 正常工作
+                                             * P7=0 → RESET# 低 → PHY 处于复位 */
 
 /* ── 3. 上电初始状态 ────────────────────────────────────────────────────────
- * PCF8574 上电默认所有引脚为高（0xFF），P7=1 会使 PHY 处于复位状态。
+ * PCF8574 上电默认所有引脚为高（0xFF）。
+ * 硬件确认：P7 直连（无 NPN 反相）YT8512C RESET# 引脚：
+ *   P7=1 → RESET# HIGH → PHY 正常工作（输出 REFCLK）
+ *   P7=0 → RESET# LOW  → PHY 处于复位（无 REFCLK）
  * Init 函数必须尽快写入安全初始值：
  *   P0=1  BEEP 关（PNP 截止，低电平响，须置高才静音）
  *   P1=1  输入引脚置高（准双向口读取前须先写1）
@@ -41,15 +44,16 @@ extern "C" {
  *   P4=1  输入引脚置高
  *   P5=0  RS485 接收模式
  *   P6=1  备用高（输入模式）
- *   P7=0  ★ 释放 PHY 复位，以太网才能正常工作
+ *   P7=1  ★ 释放 PHY 复位（RESET# HIGH），以太网才能正常工作
  *
- * 0b 0_1_0_1_0_1_1_0 = 0x56
+ * 0b 1_1_0_1_0_1_1_1 = 0xD7
  */
 #define PCF8574_INIT_STATE  (PCF8574_PIN_BEEP      | \
                              PCF8574_PIN_AP_INT    | \
                              PCF8574_PIN_DCMI_PWDN | \
                              PCF8574_PIN_6D_INT    | \
-                             PCF8574_PIN_EXIO)      /* 0x57：P0=1 使蜂鸣器静音 */
+                             PCF8574_PIN_EXIO      | \
+                             PCF8574_PIN_ETH_RESET) /* 0xD7：P7=1 释放 PHY RESET# */
 
 /* ── 4. 返回值 ──────────────────────────────────────────────────────────── */
 #define PCF8574_STATUS_OK       ( 0)

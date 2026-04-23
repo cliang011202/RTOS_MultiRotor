@@ -194,7 +194,7 @@ void StartpwmCtrlTask(void *argument)
          TIM1->PSC, TIM1->ARR, TIM1->CCR1);
 
   PWM_Init();
-  printf("[PWM] Init done — 7 channels active\r\n");
+  printf("[PWM] Init done - 7 channels active\r\n");
   PWM_ArmESC();   /* 输出 1500 µs 中性油门，等待 ESC 解锁 */
   printf("[PWM] ESC armed\r\n");
 
