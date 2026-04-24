@@ -123,6 +123,18 @@ int32_t YT8512C_Init(yt8512c_Object_t *pObj)
 
     } while (regval & YT8512C_BCR_SOFT_RESET);  /* BCR[15] 清零 = 复位完成 */
 
+    /* 等待自动协商完成（最长 3 s）。
+     * 软件复位后 PHY 重新开始协商，此时 BSR[2](Link Status) 短暂为 0。
+     * 如果不等协商完成就返回，ethernet_link_thread 立刻轮询会得到 LINK_DOWN，
+     * 触发不必要的 netif_set_link_down / Stop_IT 循环。 */
+    tickstart = (uint32_t)pObj->IO.GetTick();
+    do {
+        if (pObj->IO.ReadReg(pObj->DevAddr, YT8512C_BSR, &regval) < 0)
+            return YT8512C_STATUS_READ_ERROR;
+        if ((uint32_t)pObj->IO.GetTick() - tickstart > 3000U)
+            break;  /* 超时后继续，避免卡死；GetLinkState 会在后续再次确认 */
+    } while (!(regval & YT8512C_BSR_AUTONEGO_CPLT));
+
     pObj->Is_Initialized = 1;
     return YT8512C_STATUS_OK;
 }

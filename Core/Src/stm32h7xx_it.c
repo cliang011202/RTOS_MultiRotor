@@ -58,7 +58,7 @@
 extern TIM_HandleTypeDef htim6;
 
 /* USER CODE BEGIN EV */
-
+extern ETH_HandleTypeDef heth;
 /* USER CODE END EV */
 
 /******************************************************************************/
@@ -174,5 +174,8 @@ void TIM6_DAC_IRQHandler(void)
 }
 
 /* USER CODE BEGIN 1 */
-
+void ETH_IRQHandler(void)
+{
+  HAL_ETH_IRQHandler(&heth);
+}
 /* USER CODE END 1 */

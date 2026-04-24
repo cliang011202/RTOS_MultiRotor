@@ -176,6 +176,8 @@ void pbuf_free_custom(struct pbuf *p);
   */
 void HAL_ETH_RxCpltCallback(ETH_HandleTypeDef *handlerEth)
 {
+  extern volatile uint32_t g_eth_rx_irq_count;
+  g_eth_rx_irq_count++;
   osSemaphoreRelease(RxPktSemaphore);
 }
 /**
@@ -465,6 +467,11 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
     Txbuffer[i].buffer = q->payload;
     Txbuffer[i].len = q->len;
 
+    /* TX pbuf payload lives in cached RAM_D1; flush to RAM so ETH DMA sees fresh data. */
+    uint32_t cache_base = (uint32_t)q->payload & ~0x1FUL;
+    uint32_t cache_top  = ((uint32_t)q->payload + q->len + 0x1FUL) & ~0x1FUL;
+    SCB_CleanDCache_by_Addr((uint32_t*)cache_base, (int32_t)(cache_top - cache_base));
+
     if(i>0)
     {
       Txbuffer[i-1].next = &Txbuffer[i];
@@ -742,7 +749,11 @@ void HAL_ETH_MspInit(ETH_HandleTypeDef* ethHandle)
     HAL_GPIO_Init(GPIOG, &GPIO_InitStruct);
 
   /* USER CODE BEGIN ETH_MspInit 1 */
-
+    /* ETH 全局中断：优先级必须 >= configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY(5)，
+     * 因为 HAL_ETH_RxCpltCallback 里调用了 osSemaphoreRelease（FromISR 变体）。
+     * 设为 7，低于 FreeRTOS 内核临界区，高于普通任务。 */
+    HAL_NVIC_SetPriority(ETH_IRQn, 7, 0);
+    HAL_NVIC_EnableIRQ(ETH_IRQn);
   /* USER CODE END ETH_MspInit 1 */
   }
 }
@@ -869,33 +880,63 @@ void ethernet_link_thread(void* argument)
 
   struct netif *netif = (struct netif *) argument;
 /* USER CODE BEGIN ETH link init */
-/* YT8512C link monitoring loop — runs forever; LAN8742 loop below is unreachable */
-for (;;) {
-    PHYLinkState = YT8512C_GetLinkState(&YT8512C);
-    linkchanged = 0U;
-    if (netif_is_link_up(netif) && (PHYLinkState <= YT8512C_STATUS_LINK_DOWN)) {
-        HAL_ETH_Stop_IT(&heth);
-        netif_set_down(netif);
-        netif_set_link_down(netif);
-    } else if (!netif_is_link_up(netif) && (PHYLinkState > YT8512C_STATUS_LINK_DOWN)) {
-        switch (PHYLinkState) {
-        case YT8512C_STATUS_100MBITS_FULLDUPLEX: duplex=ETH_FULLDUPLEX_MODE; speed=ETH_SPEED_100M; linkchanged=1; break;
-        case YT8512C_STATUS_100MBITS_HALFDUPLEX: duplex=ETH_HALFDUPLEX_MODE; speed=ETH_SPEED_100M; linkchanged=1; break;
-        case YT8512C_STATUS_10MBITS_FULLDUPLEX:  duplex=ETH_FULLDUPLEX_MODE; speed=ETH_SPEED_10M;  linkchanged=1; break;
-        case YT8512C_STATUS_10MBITS_HALFDUPLEX:  duplex=ETH_HALFDUPLEX_MODE; speed=ETH_SPEED_10M;  linkchanged=1; break;
-        default: break;
+/* YT8512C link monitoring loop — runs forever; LAN8742 loop below is unreachable.
+ *
+ * 两个稳健性措施：
+ * 1. MDIO 读错误（负返回值）直接跳过，不当作 LINK_DOWN 处理。
+ *    原因：HAL_ETH_ReadPHYRegister 在 DMA 中断繁忙时偶尔返回 HAL_BUSY，
+ *    若将此错误误判为断链，每次 Stop_IT/Start_IT 都会抖动一次 netif，
+ *    导致 ARP 缓存清空、ping 无法完成。
+ *
+ * 2. 连续 3 次（≈300 ms）读到 LINK_DOWN 才真正断链（迟滞）。
+ *    原因：协商过程中 BSR[2] 可能短暂为 0（锁存低），单次采样会误触发。
+ */
+{
+    static uint8_t down_cnt = 0;
+    for (;;) {
+        PHYLinkState = YT8512C_GetLinkState(&YT8512C);
+
+        /* 忽略 MDIO 通信错误（负值），等下一个周期再试 */
+        if (PHYLinkState < 0) {
+            osDelay(100);
+            continue;
         }
-        if (linkchanged) {
-            HAL_ETH_GetMACConfig(&heth, &MACConf);
-            MACConf.DuplexMode = duplex;
-            MACConf.Speed = speed;
-            HAL_ETH_SetMACConfig(&heth, &MACConf);
-            HAL_ETH_Start_IT(&heth);
-            netif_set_up(netif);
-            netif_set_link_up(netif);
+
+        linkchanged = 0U;
+
+        if (netif_is_link_up(netif)) {
+            if (PHYLinkState <= YT8512C_STATUS_LINK_DOWN) {
+                /* 迟滞：需连续 3 次确认才断链 */
+                if (++down_cnt >= 3) {
+                    down_cnt = 0;
+                    HAL_ETH_Stop_IT(&heth);
+                    netif_set_down(netif);
+                    netif_set_link_down(netif);
+                }
+            } else {
+                down_cnt = 0;  /* 链路正常，复位计数器 */
+            }
+        } else if (PHYLinkState > YT8512C_STATUS_LINK_DOWN) {
+            down_cnt = 0;
+            switch (PHYLinkState) {
+            case YT8512C_STATUS_100MBITS_FULLDUPLEX: duplex=ETH_FULLDUPLEX_MODE; speed=ETH_SPEED_100M; linkchanged=1; break;
+            case YT8512C_STATUS_100MBITS_HALFDUPLEX: duplex=ETH_HALFDUPLEX_MODE; speed=ETH_SPEED_100M; linkchanged=1; break;
+            case YT8512C_STATUS_10MBITS_FULLDUPLEX:  duplex=ETH_FULLDUPLEX_MODE; speed=ETH_SPEED_10M;  linkchanged=1; break;
+            case YT8512C_STATUS_10MBITS_HALFDUPLEX:  duplex=ETH_HALFDUPLEX_MODE; speed=ETH_SPEED_10M;  linkchanged=1; break;
+            default: break;
+            }
+            if (linkchanged) {
+                HAL_ETH_GetMACConfig(&heth, &MACConf);
+                MACConf.DuplexMode = duplex;
+                MACConf.Speed = speed;
+                HAL_ETH_SetMACConfig(&heth, &MACConf);
+                HAL_ETH_Start_IT(&heth);
+                netif_set_up(netif);
+                netif_set_link_up(netif);
+            }
         }
+        osDelay(100);
     }
-    osDelay(100);
 }
 /* USER CODE END ETH link init */
 

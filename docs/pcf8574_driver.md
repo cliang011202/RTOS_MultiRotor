@@ -4,7 +4,7 @@
 
 `pcf8574` 是针对 **NXP PCF8574** 8位 I2C IO 扩展芯片的驱动。它通过共享 I2C 总线（I2C2，SCL=PH4 / SDA=PH5）提供 8 个额外的 GPIO，并将以太网 PHY 的硬件复位集成到 Ethernet 初始化流程中。
 
-**关键作用**：PCF8574 的 P7 脚经 NPN 三极管反相后控制 YT8512C 的 `RESET#` 引脚。上电时 PCF8574 所有脚默认为高（0xFF），导致 PHY 一直处于复位状态，MDIO 总线无响应。**驱动初始化必须在 YT8512C_Init 之前执行**，否则以太网无法工作。
+**关键作用**：PCF8574 的 P7 脚控制 YT8512C 的 `RESET#` 引脚。上电时 PCF8574 所有脚默认为高（0xFF），导致 PHY 一直处于复位状态，MDIO 总线无响应。**驱动初始化必须在 YT8512C_Init 之前执行**，否则以太网无法工作。
 
 ---
 
@@ -59,8 +59,8 @@ LWIP/Target/ethernetif.c
 **P7 与 ETH_RESET 的逻辑关系：**
 
 ```
-P7 = 1  →  PHY RESET# = 低  →  PHY 处于复位状态
-P7 = 0  →  PHY RESET# = 高  →  PHY 正常运行,输出 50 MHz REFCLK
+P7 = 0  →  PHY RESET# = 低  →  PHY 处于复位状态,无 REFCLK 输出
+P7 = 1  →  PHY RESET# = 高  →  PHY 正常运行,输出 50 MHz REFCLK
 ```
 
 **上电初始状态字节（`PCF8574_INIT_STATE`）：**

@@ -166,6 +166,22 @@ SECTIONS
     . = ALIGN(8);
   } >RAM_D1
 
+  /* Ethernet DMA descriptors and RX pool — must reside in non-cached RAM_D2.
+   * D-Cache is enabled globally; placing these buffers here avoids the need
+   * for per-packet cache maintenance on the RX path.
+   * TX pbufs come from lwIP heap (RAM_D1); cache is cleaned in low_level_output. */
+  .lwip_sec (NOLOAD) :
+  {
+    . = ABSOLUTE(0x30000000);
+    *(.RxDecripSection)       /* DMARxDscrTab — ETH Rx DMA descriptors */
+
+    . = ABSOLUTE(0x30000080);
+    *(.TxDecripSection)       /* DMATxDscrTab — ETH Tx DMA descriptors */
+
+    . = ABSOLUTE(0x30000100);
+    *(.Rx_PoolSection)        /* memp_memory_RX_POOL_base — zero-copy RX buffers */
+  } >RAM_D2
+
   /* Remove information from the standard libraries */
   /DISCARD/ :
   {

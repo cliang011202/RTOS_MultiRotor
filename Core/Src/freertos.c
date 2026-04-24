@@ -30,6 +30,7 @@
 #include "lwip.h"
 #include "lwip/netif.h"
 extern struct netif gnetif;
+volatile uint32_t g_eth_rx_irq_count = 0;  /* incremented in RxCpltCallback */
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -156,7 +157,8 @@ void StartDefaultTask(void *argument)
 
   for(;;)
   {
-    osDelay(1000);
+    printf("[ETH] RxIRQ=%lu\r\n", g_eth_rx_irq_count);
+    osDelay(2000);
   }
   /* USER CODE END StartDefaultTask */
 }
