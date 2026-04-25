@@ -44,8 +44,10 @@
 /* Time to block waiting for transmissions to finish */
 #define ETHIF_TX_TIMEOUT (2000U)
 /* USER CODE BEGIN OS_THREAD_STACK_SIZE_WITH_RTOS */
-/* Stack size of the interface thread */
-#define INTERFACE_THREAD_STACK_SIZE ( 350 )
+/* Stack size of the interface thread (BYTES — CMSIS-RTOS2 wrapper).
+ * CubeMX default 350 B is dangerously small under sustained traffic; the
+ * HAL_ETH_ReadData → tcpip_input call chain plus IRQ frame saves push past it. */
+#define INTERFACE_THREAD_STACK_SIZE ( 2048 )
 /* USER CODE END OS_THREAD_STACK_SIZE_WITH_RTOS */
 /* Network interface name */
 #define IFNAME0 's'

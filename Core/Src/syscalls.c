@@ -39,7 +39,9 @@ extern int __io_getchar(void) __attribute__((weak));
 #include "usart.h"
 int __io_putchar(int ch)
 {
-    HAL_UART_Transmit(&huart1, (uint8_t *)&ch, 1, HAL_MAX_DELAY);
+    /* 1000 ms timeout: HAL_MAX_DELAY would spin forever if UART state is
+     * corrupted by a concurrent call from another RTOS task. */
+    HAL_UART_Transmit(&huart1, (uint8_t *)&ch, 1, 1000);
     return ch;
 }
 

@@ -28,12 +28,27 @@
 #include <stdio.h>
 #include <string.h>
 #include "pwm_ctrl.h"
+#include "usart.h"
 #include "lwip.h"
 #include "lwip/netif.h"
 #include "lwip/sockets.h"
 #include "wec_sim_packet.h"
 extern struct netif gnetif;
 volatile uint32_t g_eth_rx_irq_count = 0;  /* incremented in RxCpltCallback */
+
+/* Stack overflow hook: bypass mutex/printf (kernel state is already trashed),
+ * raw-poll UART so the task name reaches the console before we halt. */
+void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
+{
+    (void)xTask;
+    const char *prefix = "\r\n*** STACK OVERFLOW: ";
+    HAL_UART_Transmit(&huart1, (uint8_t *)prefix, (uint16_t)strlen(prefix), 100);
+    HAL_UART_Transmit(&huart1, (uint8_t *)pcTaskName,
+                      (uint16_t)strlen(pcTaskName), 100);
+    HAL_UART_Transmit(&huart1, (uint8_t *)" ***\r\n", 6, 100);
+    __disable_irq();
+    for (;;) {}
+}
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -48,12 +63,20 @@ volatile uint32_t g_eth_rx_irq_count = 0;  /* incremented in RxCpltCallback */
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
-
+/* Thread-safe printf: serialises all UART output through a single mutex.
+ * HAL_UART_Transmit is NOT re-entrant; calling it from two tasks concurrently
+ * corrupts huart1.gState and causes UART_WaitOnFlagUntilTimeout to spin
+ * forever (especially with HAL_MAX_DELAY). */
+#define LOG(...)  do {                                      \
+    osMutexAcquire(g_uart_mutex, osWaitForever);            \
+    printf(__VA_ARGS__);                                    \
+    osMutexRelease(g_uart_mutex);                           \
+} while (0)
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
-
+osMutexId_t g_uart_mutex;   /* extern'd in lwip.c */
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
@@ -66,7 +89,7 @@ const osThreadAttr_t defaultTask_attributes = {
 osThreadId_t udpRxTaskHandle;
 const osThreadAttr_t udpRxTask_attributes = {
   .name = "udpRxTask",
-  .stack_size = 1024 * 4,
+  .stack_size = 2048 * 4,   /* 8 KB: printf with 6 doubles (newlib full) needs ~3 KB stack */
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for pwmCtrlTask */
@@ -100,7 +123,7 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE END Init */
 
   /* USER CODE BEGIN RTOS_MUTEX */
-  /* add mutexes, ... */
+  g_uart_mutex = osMutexNew(NULL);
   /* USER CODE END RTOS_MUTEX */
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
@@ -154,13 +177,13 @@ void StartDefaultTask(void *argument)
   }
 
   if (netif_is_link_up(&gnetif))
-      printf("[ETH] Link UP  IP=%s\r\n", ip4addr_ntoa(netif_ip4_addr(&gnetif)));
+      LOG("[ETH] Link UP  IP=%s\r\n", ip4addr_ntoa(netif_ip4_addr(&gnetif)));
   else
-      printf("[ETH] Link DOWN after 5 s\r\n");
+      LOG("[ETH] Link DOWN after 5 s\r\n");
 
   for(;;)
   {
-    printf("[ETH] RxIRQ=%lu\r\n", g_eth_rx_irq_count);
+    LOG("[ETH] RxIRQ=%lu\r\n", g_eth_rx_irq_count);
     osDelay(2000);
   }
   /* USER CODE END StartDefaultTask */
@@ -186,7 +209,7 @@ void StartudpRxTask(void *argument)
   /* 创建 UDP socket */
   sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
   if (sock < 0) {
-      printf("[UDP] socket() failed\r\n");
+      LOG("[UDP] socket() failed\r\n");
       vTaskDelete(NULL);
       return;
   }
@@ -198,35 +221,44 @@ void StartudpRxTask(void *argument)
   local.sin_port        = htons(WEC_SIM_UDP_PORT);
 
   if (bind(sock, (struct sockaddr *)&local, sizeof(local)) < 0) {
-      printf("[UDP] bind() failed\r\n");
+      LOG("[UDP] bind() failed\r\n");
       close(sock);
       vTaskDelete(NULL);
       return;
   }
 
-  printf("[UDP] Listening on port %u\r\n", WEC_SIM_UDP_PORT);
+  /* 设置接收超时：防止 recvfrom 在网络异常时永久阻塞 */
+  struct timeval tv = { .tv_sec = 2, .tv_usec = 0 };
+  setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+  LOG("[UDP] Listening on port %u\r\n", WEC_SIM_UDP_PORT);
 
   for (;;) {
       rxlen = recvfrom(sock, &pkt, sizeof(pkt), 0,
                        (struct sockaddr *)&remote, &remote_len);
 
+      /* recvfrom 超时或错误（errno=EAGAIN/ETIMEDOUT）：静默继续，不 printf 防止 mutex 争用 */
+      if (rxlen < 0) {
+          continue;
+      }
+
       /* 长度校验 */
       if (rxlen != (int)sizeof(pkt)) {
-          printf("[UDP] Bad len=%d (expect %u)\r\n", rxlen, WEC_SIM_PACKET_SIZE);
+          LOG("[UDP] Bad len=%d (expect %u)\r\n", rxlen, WEC_SIM_PACKET_SIZE);
           continue;
       }
 
       /* 丢包检测 */
       if (pkt.seq != last_seq + 1 && last_seq != 0)
-          printf("[UDP] Drop! expect seq=%lu got %lu\r\n",
+          LOG("[UDP] Drop! expect seq=%lu got %lu\r\n",
                  (unsigned long)(last_seq + 1), (unsigned long)pkt.seq);
       last_seq = pkt.seq;
 
-      /* 打印 6-DOF 载荷 */
-      printf("[UDP] seq=%-6lu  F=(%6.1f %6.1f %6.1f) N   M=(%6.1f %6.1f %6.1f) Nm\r\n",
+      /* 打印 6-DOF 载荷（整数格式：避免 %f 触发 dtoa 占用 ~3 KB 栈） */
+      LOG("[UDP] seq=%-6lu  F=(%d %d %d) N   M=(%d %d %d) Nm\r\n",
              (unsigned long)pkt.seq,
-             (double)pkt.fx, (double)pkt.fy, (double)pkt.fz,
-             (double)pkt.mx, (double)pkt.my, (double)pkt.mz);
+             (int)pkt.fx, (int)pkt.fy, (int)pkt.fz,
+             (int)pkt.mx, (int)pkt.my, (int)pkt.mz);
   }
   /* USER CODE END StartudpRxTask */
 }
@@ -242,16 +274,16 @@ void StartpwmCtrlTask(void *argument)
 {
   /* USER CODE BEGIN StartpwmCtrlTask */
   /* Verify TIM1 config before starting PWM — expected: PSC=99 ARR=19999 CCR1=1500 */
-  printf("[PWM] TIM1 PSC=%lu  ARR=%lu  CCR1=%lu\r\n",
-         TIM1->PSC, TIM1->ARR, TIM1->CCR1);
+  LOG("[PWM] TIM1 PSC=%lu  ARR=%lu  CCR1=%lu\r\n",
+      TIM1->PSC, TIM1->ARR, TIM1->CCR1);
 
   PWM_Init();
-  printf("[PWM] Init done - 7 channels active\r\n");
+  LOG("[PWM] Init done - 7 channels active\r\n");
   PWM_ArmESC();   /* 输出 1500 µs 中性油门，等待 ESC 解锁 */
-  printf("[PWM] ESC armed\r\n");
+  LOG("[PWM] ESC armed\r\n");
 
   /* ── 扫频验证：给示波器一个可观测的变化波形 ──────────────────── */
-  printf("[PWM] Sweep start: 1000->2000->1500 us\r\n");
+  LOG("[PWM] Sweep start: 1000->2000->1500 us\r\n");
   uint16_t sweep[PWM_MOTOR_COUNT];
   for (uint16_t p = 1000; p <= 2000; p += 10) {
       for (int j = 0; j < PWM_MOTOR_COUNT; j++) sweep[j] = p;
@@ -265,7 +297,7 @@ void StartpwmCtrlTask(void *argument)
   }
   for (int j = 0; j < PWM_MOTOR_COUNT; j++) sweep[j] = PWM_PULSE_NEUTRAL_US;
   PWM_SetAll(sweep);
-  printf("[PWM] Sweep done -- back to neutral 1500 us\r\n");
+  LOG("[PWM] Sweep done -- back to neutral 1500 us\r\n");
   /* ────────────────────────────────────────────────────────────── */
 
   /* 控制循环：等待逆运动学结果（Queue 待实现），更新 7 路脉宽 */

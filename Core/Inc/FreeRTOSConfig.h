@@ -96,6 +96,13 @@
 /* The following flag must be enabled only when using newlib */
 #define configUSE_NEWLIB_REENTRANT          1
 
+/* USER CODE BEGIN STACK_CHECK */
+/* Method 2 = scan whole stack on every context switch; catches deep but brief
+ * overruns that method 1 (only checking the top word) misses. Hook below. */
+#define configCHECK_FOR_STACK_OVERFLOW       2
+#define configRECORD_STACK_HIGH_ADDRESS      1
+/* USER CODE END STACK_CHECK */
+
 /* CMSIS-RTOS V2 flags */
 #define configUSE_OS2_THREAD_SUSPEND_RESUME  1
 #define configUSE_OS2_THREAD_ENUMERATE       1

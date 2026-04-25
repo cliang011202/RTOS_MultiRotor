@@ -130,13 +130,12 @@ static void ethernet_link_status_updated(struct netif *netif)
   if (netif_is_up(netif))
   {
 /* USER CODE BEGIN 5 */
-    printf("[ETH] Link UP  IP=%s\r\n", ip4addr_ntoa(netif_ip4_addr(netif)));
+/* link-up is already logged by defaultTask polling netif_is_link_up() */
 /* USER CODE END 5 */
   }
   else /* netif is down */
   {
 /* USER CODE BEGIN 6 */
-    printf("[ETH] Link DOWN\r\n");
 /* USER CODE END 6 */
   }
 }

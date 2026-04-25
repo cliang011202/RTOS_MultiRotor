@@ -72,7 +72,11 @@
 /*----- Value in opt.h for LWIP_NETIF_LINK_CALLBACK: 0 -----*/
 #define LWIP_NETIF_LINK_CALLBACK 1
 /*----- Value in opt.h for TCPIP_THREAD_STACKSIZE: 0 -----*/
-#define TCPIP_THREAD_STACKSIZE 1024
+/* CMSIS-RTOS2 wrapper treats stack_size as BYTES (cmsis_os2.c:475 divides by
+ * sizeof(StackType_t)=4). Native FreeRTOS xTaskCreate would treat 1024 as
+ * WORDS = 4 KB, but here it becomes 1 KB — too small for udp_input call chain,
+ * causing HardFault on the first UDP packet. Use 4096 bytes. */
+#define TCPIP_THREAD_STACKSIZE 4096
 /*----- Value in opt.h for TCPIP_THREAD_PRIO: 1 -----*/
 #define TCPIP_THREAD_PRIO 24
 /*----- Value in opt.h for TCPIP_MBOX_SIZE: 0 -----*/
