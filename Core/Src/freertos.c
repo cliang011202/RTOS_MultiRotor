@@ -26,9 +26,12 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
+#include <string.h>
 #include "pwm_ctrl.h"
 #include "lwip.h"
 #include "lwip/netif.h"
+#include "lwip/sockets.h"
+#include "wec_sim_packet.h"
 extern struct netif gnetif;
 volatile uint32_t g_eth_rx_irq_count = 0;  /* incremented in RxCpltCallback */
 /* USER CODE END Includes */
@@ -173,10 +176,57 @@ void StartDefaultTask(void *argument)
 void StartudpRxTask(void *argument)
 {
   /* USER CODE BEGIN StartudpRxTask */
-  /* Infinite loop */
-  for(;;)
-  {
-    osDelay(1);
+  int sock;
+  struct sockaddr_in local, remote;
+  socklen_t remote_len = sizeof(remote);
+  WecSimPacket_t pkt;
+  int rxlen;
+  uint32_t last_seq = 0;
+
+  /* 创建 UDP socket */
+  sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  if (sock < 0) {
+      printf("[UDP] socket() failed\r\n");
+      vTaskDelete(NULL);
+      return;
+  }
+
+  /* 绑定到 0.0.0.0:8080 */
+  memset(&local, 0, sizeof(local));
+  local.sin_family      = AF_INET;
+  local.sin_addr.s_addr = INADDR_ANY;
+  local.sin_port        = htons(WEC_SIM_UDP_PORT);
+
+  if (bind(sock, (struct sockaddr *)&local, sizeof(local)) < 0) {
+      printf("[UDP] bind() failed\r\n");
+      close(sock);
+      vTaskDelete(NULL);
+      return;
+  }
+
+  printf("[UDP] Listening on port %u\r\n", WEC_SIM_UDP_PORT);
+
+  for (;;) {
+      rxlen = recvfrom(sock, &pkt, sizeof(pkt), 0,
+                       (struct sockaddr *)&remote, &remote_len);
+
+      /* 长度校验 */
+      if (rxlen != (int)sizeof(pkt)) {
+          printf("[UDP] Bad len=%d (expect %u)\r\n", rxlen, WEC_SIM_PACKET_SIZE);
+          continue;
+      }
+
+      /* 丢包检测 */
+      if (pkt.seq != last_seq + 1 && last_seq != 0)
+          printf("[UDP] Drop! expect seq=%lu got %lu\r\n",
+                 (unsigned long)(last_seq + 1), (unsigned long)pkt.seq);
+      last_seq = pkt.seq;
+
+      /* 打印 6-DOF 载荷 */
+      printf("[UDP] seq=%-6lu  F=(%6.1f %6.1f %6.1f) N   M=(%6.1f %6.1f %6.1f) Nm\r\n",
+             (unsigned long)pkt.seq,
+             (double)pkt.fx, (double)pkt.fy, (double)pkt.fz,
+             (double)pkt.mx, (double)pkt.my, (double)pkt.mz);
   }
   /* USER CODE END StartudpRxTask */
 }

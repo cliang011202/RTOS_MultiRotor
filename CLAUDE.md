@@ -40,7 +40,7 @@ Device configuration is managed via **STM32CubeMX** — open `RTOS_MultiRotor.io
 **Key peripherals:**
 - **TIM1 / TIM8**: 7 PWM channels at 50 Hz (20 ms period) for ESC motor control. Pulse = 1000–2000 µs; neutral = 1500.
 - **USART1**: Debug serial, PA9 (TX) / PA10 (RX) — see "Debug Serial" section below.
-- **I2C** at 400 kHz: SCL = PH4, SDA = PH5. Shared bus for IMU, PCF8574, and other sensors.
+- **I2C2** at 400 kHz: SCL = PH4, SDA = PH5. Shared bus for IMU, PCF8574, and other sensors.
 - **ETH + YT8512C PHY**: Ethernet MAC for UDP telemetry/command (see below).
 - **Clock**: 25 MHz HSE → PLL → 200 MHz system clock.
 
@@ -61,9 +61,11 @@ STM32H743 has a built-in Ethernet MAC; the external PHY is **YT8512C** connected
 | RMII_RXD1 | PC5 |
 | RMII_CRS_DV | PA7 |
 | RMII_REF_CLK | PA1 |
-| ETH_RESET | PCF8574 P7 (via NPN inverter) |
+| ETH_RESET | PCF8574 P7 (direct, no inverter) |
 
-**YT8512C PHY driver note**: CubeMX has no native YT8512C driver — it generates LAN8742-based code by default. After code generation, either modify the PHY register operations in `LWIP/App/ethernetif.c` or replace it with a YT8512C-specific driver. The **PHY address** (typically `0x00` or `0x01`) must be confirmed by checking the PHYADD pin levels on the board and set accordingly (e.g. `#define ETHERNET_PHY_ADDRESS 0x00` in `ethernetif.c` or the lwIP config).
+**YT8512C PHY driver**: Implemented at `Drivers/BSP/Components/yt8512c/`. Uses dependency injection — `ethernetif.c` registers `HAL_ETH_ReadPHYRegister`/`WritePHYRegister` as I/O callbacks. The driver auto-scans MDIO addresses 0–31 to find the PHY (reads PHYID1/2 OUI) rather than using a hardcoded address. Key difference from the CubeMX-generated LAN8742 code: link speed/duplex are read from register `0x11` (PHYSTS, vendor-specific) not `0x1F`.
+
+**Hardware init sequence constraint**: PCF8574 P7 is the direct RESET# line of the YT8512C (P7=1 = normal, P7=0 = reset). `PCF8574_Init()` must be called **before** ETH MAC init to release RESET#, followed by at least 150 ms delay for the PHY's REFCLK (50 MHz) to stabilize. `main.c` does this with a 300 ms `HAL_Delay` between PCF8574 init and the RTOS scheduler start.
 
 **Pin conflicts (mutually exclusive — time-division multiplex OK):**
 - **PA2**: ETH_MDIO ↔ USART2_TX
@@ -91,18 +93,20 @@ P11 跳帽短接 = USB 串口直通；拔掉跳帽可改接外部 TTL 设备，�
 
 ### PCF8574 IIC IO Expander
 
-Provides 8 extra GPIO pins via the shared I2C bus (PH4/PH5). Interrupt output on **PB12**.
+Provides 8 extra GPIO pins via the shared I2C2 bus (PH4/PH5). Interrupt output on **PB12**. Driver at `Drivers/BSP/Components/pcf8574/`. Uses an `OutputLatch` shadow register in the driver object because the chip cannot read back its own output state (reads return actual pin levels, not latch values).
 
 | PCF8574 Pin | Connected to |
 |-------------|-------------|
-| P0 | BEEP (buzzer) |
-| P1 | AP_INT (light sensor) |
+| P0 | BEEP (buzzer — active low; P0=1 = silent) |
+| P1 | AP_INT (light sensor, input) |
 | P2 | DCMI_PWDN (OLED/Camera) |
 | P3 | USB_PWR (USB HOST) |
-| P4 | 6D_INT (6-axis IMU) |
-| P5 | RS485_RE (RS485 direction) |
+| P4 | 6D_INT (6-axis IMU, input) |
+| P5 | RS485_RE (RS485 direction: 0=Rx, 1=Tx) |
 | P6 | EXIO (P3 header, spare) |
-| P7 | ETH_RESET (via NPN inverter) |
+| P7 | ETH_RESET (direct RESET# line: P7=1=normal, P7=0=reset) |
+
+`PCF8574_INIT_STATE = 0xD7`: P0=1(beep off), P1=1(input), P2=1(camera off), P3=0(USB off), P4=1(input), P5=0(RS485 Rx), P6=1(spare high), P7=1(PHY running).
 
 ## Architecture
 
@@ -112,11 +116,43 @@ Three tasks run concurrently:
 
 | Task | Priority | Stack | Role |
 |------|----------|-------|------|
-| `defaultTask` | Normal | 2 KB | Calls `MX_LWIP_Init()` to bring up lwIP network stack |
-| `udpRxTask` | Normal | 4 KB | Receives 6-DOF load packets from WEC-SIM MOST upper computer |
-| `pwmCtrlTask` | **High** | 2 KB | Applies inverse kinematics → drives 7-channel ESC PWM outputs |
+| `defaultTask` | Normal | 2 KB | Calls `MX_LWIP_Init()` then polls link status; logs `g_eth_rx_irq_count` every 2 s |
+| `udpRxTask` | Normal | 4 KB | Receives 6-DOF load packets from WEC-SIM MOST upper computer; currently logs them |
+| `pwmCtrlTask` | **High** | 2 KB | Runs sweep test on startup, then loops at 50 Hz waiting for IK result (Queue pending) |
 
 `pwmCtrlTask` runs at high priority so motor control is never preempted by networking.
+
+**⚠ Pending work**: The udpRxTask→pwmCtrlTask data path is not yet wired. `pwmCtrlTask` has a `TODO` block for `xQueueReceive(xLoadQueue, &load, portMAX_DELAY)` + `inverse_kinematics(&load, pulses)` + `PWM_SetAll(pulses)`. A FreeRTOS queue (`xLoadQueue`) and the IK function need to be implemented.
+
+### UDP Packet Format (`Core/Inc/wec_sim_packet.h`)
+
+Fixed 28-byte little-endian packet from WEC-SIM MOST to STM32 UDP port 8080:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `seq` | uint32 | Frame counter (monotonic, for drop detection) |
+| `fx` | float32 | Tower-top force X (N) |
+| `fy` | float32 | Tower-top force Y (N) |
+| `fz` | float32 | Tower-top force Z (N) |
+| `mx` | float32 | Tower-top moment X (N·m) |
+| `my` | float32 | Tower-top moment Y (N·m) |
+| `mz` | float32 | Tower-top moment Z (N·m) |
+
+No byte-swap needed (both x86 Simulink host and ARM Cortex-M7 are little-endian).
+
+### Motor Channel Mapping (`Core/Src/pwm_ctrl.c`)
+
+| Motor | Timer | Channel | Pin |
+|-------|-------|---------|-----|
+| 1 | TIM1 | CH1 | PE9 |
+| 2 | TIM1 | CH2 | PE11 |
+| 3 | TIM1 | CH3 | PE13 |
+| 4 | TIM1 | CH4 | PA11 |
+| 5 | TIM8 | CH1 | PC6 |
+| 6 | TIM8 | CH2 | PC7 |
+| 7 | TIM8 | CH3 | PC8 |
+
+Timer config: PSC=99, ARR=19999 → 1 MHz counter clock → 1 count = 1 µs → CCR value equals pulse width in µs directly. `PWM_SetAll()` writes all 7 CCRs via `__HAL_TIM_SET_COMPARE` (not `HAL_TIM_PWM_Start`, which is only needed once in `PWM_Init`).
 
 ### Memory Layout (Linker Script: `STM32H743IITX_FLASH.ld`)
 
@@ -128,17 +164,26 @@ Three tasks run concurrently:
 | RAM_D2 | 0x30000000 | 288 KB | Ethernet DMA buffers |
 | RAM_D3 | 0x38000000 | 64 KB | Low-power RAM |
 
-FreeRTOS heap (64 KB, `heap_4.c`) lives in RAM_D1. Ethernet DMA descriptors must stay in RAM_D2 (non-cached, MPU-configured).
+FreeRTOS heap (64 KB, `heap_4.c`) lives in RAM_D1. lwIP heap is at `0x30004000` in RAM_D2. Ethernet DMA descriptors must stay in RAM_D2 (non-cached, MPU-configured).
+
+### Custom BSP Drivers (`Drivers/BSP/Components/`)
+
+| Driver | Files | Notes |
+|--------|-------|-------|
+| YT8512C PHY | `yt8512c/yt8512c.{c,h}` | MDIO over dependency-injected IO callbacks; auto-scans PHY address |
+| PCF8574 IO expander | `pcf8574/pcf8574.{c,h}` | Shadow register for write-back; controls ETH_RESET, BEEP, RS485 |
+
+Driver docs in `docs/` (yt8512c_driver.md, pcf8574_driver.md, pwm_ctrl.md).
 
 ### Networking (`LWIP/`)
 
-lwIP is initialized in `defaultTask` via `MX_LWIP_Init()`. The `ethernetif.c` driver handles DMA-based Ethernet with RTOS integration (`WITH_RTOS=1`). UDP socket code belongs in `udpRxTask`.
+lwIP 2.1.2 is initialized in `defaultTask` via `MX_LWIP_Init()`. `LWIP/Target/ethernetif.c` handles DMA-based Ethernet with RTOS integration (`WITH_RTOS=1`) and hardware checksum offload (`CHECKSUM_BY_HARDWARE=1`). UDP socket code belongs in `udpRxTask` using the lwIP socket API (`lwip/sockets.h`).
 
 ### HAL Peripheral Init (`Core/Src/`)
 
 Each peripheral has its own `MX_XXX_Init()` function called from `main.c` before the RTOS scheduler starts:
-- `tim.c` — TIM1/TIM8 PWM setup (call `HAL_TIM_PWM_Start()` per channel to enable outputs)
-- `i2c.c` — I2C master setup (PH4/PH5)
+- `tim.c` — TIM1/TIM8 PWM setup (call `HAL_TIM_PWM_Start()` per channel in `PWM_Init()` to enable outputs)
+- `i2c.c` — I2C2 master setup (PH4/PH5) — used by PCF8574 and IMU
 - `gpio.c` — Port A/B/C/G/H configuration
 
 ## Development Notes
@@ -146,6 +191,6 @@ Each peripheral has its own `MX_XXX_Init()` function called from `main.c` before
 - **CubeMX regeneration** preserves code only inside `/* USER CODE BEGIN xxx */` / `/* USER CODE END xxx */` guards. Always put custom code inside these guards — this is enforced by the IDE/CubeMX workflow.
 - **MPU regions**: RAM_D2 (0x30000000, 256 KB) is marked non-executable/non-cacheable for safe DMA use. Do not place code there.
 - **I-Cache and D-Cache** are enabled at startup. When using DMA, ensure buffers are cache-aligned or use `SCB_CleanDCache_by_Addr()` / `SCB_InvalidateDCache_by_Addr()` as appropriate.
-- **PWM neutral position**: Timers are initialized with `Pulse = 1500` (1.5 ms). ESCs typically arm with a fixed neutral pulse before varying the signal.
+- **PWM neutral position**: Timers are initialized with `Pulse = 1500` (1.5 ms). ESCs arm after receiving a stable 1500 µs signal for ~2 s (`PWM_ARM_DELAY_MS`).
 - **Pin conflicts**: PA2/PB11 shared with ETH; PA9/PA10 shared between USART1 and TIM1 CH2/CH3 — remap TIM1 CH2→PE11, CH3→PE13 before enabling USART1 debug.
 - **printf debug**: 使用 USART1（USB 串口，CH340，P11 跳帽）而非 ITM/SWV；`syscalls.c` 中 `__io_putchar` 调用 `HAL_UART_Transmit(&huart1, ...)`。

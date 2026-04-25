@@ -113,7 +113,9 @@
 #define CHECKSUM_CHECK_ICMP6 0
 /*-----------------------------------------------------------------------------*/
 /* USER CODE BEGIN 1 */
-
+#define LWIP_SOCKET   1   /* BSD socket API */
+#define LWIP_NETCONN  1   /* netconn（socket 依赖） */
+#define LWIP_UDP      1
 /* USER CODE END 1 */
 
 #ifdef __cplusplus
