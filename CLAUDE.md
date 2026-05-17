@@ -16,22 +16,58 @@ This is an **STM32CubeIDE 1.17.0** managed-build project using the **built-in Cu
 
 **To build from the command line:**
 ```bash
-# From the Debug/ directory
-cd Debug
-make all
+# From the project root
+make -C Debug -j all
 
-# Build a single file (example)
-make Core/Src/freertos.o
-
-# Clean
-make clean
+# Clean (object files only — avoids make clean command-line length limit on Windows)
+Get-ChildItem Debug -Recurse -Include "*.o","*.d","*.su","*.cyclo" | Remove-Item -Force
 ```
 
-**Toolchain**: `arm-none-eabi-gcc` v12.3 must be on PATH.
+**Toolchain**: `C:\SysGCC\arm-eabi\bin` — **Arm GNU Toolchain 15.2.Rel1**. Must be on PATH.
+
+**GCC 15 compatibility**: CubeMX generates makefiles with GCC 12 flags. After CubeMX regeneration, remove `-fcyclomatic-complexity` from all `Debug/**/subdir.mk` files (GCC 15 dropped this flag):
+```bash
+cd Debug && for f in $(grep -rl 'fcyclomatic-complexity' .); do sed -i 's/-fcyclomatic-complexity//g' "$f"; done
+```
 
 **Key compiler flags**: `-mcpu=cortex-m7 -mfpu=fpv5-d16 -mfloat-abi=hard -mthumb`
 
-**Output**: `Debug/RTOS_MultiRotor.elf` — flash with STM32CubeProgrammer or via the IDE's debug session.
+**Output**: `Debug/RTOS_MultiRotor.elf`
+
+## Flashing & Debugging
+
+Uses **OpenOCD** (xPack 0.12.0) + **Cortex-Debug** VS Code extension with a **正点原子 DAP** (CMSIS-DAP v2.0.0) debug probe over SWD.
+
+### Config Files
+
+| File | Purpose |
+|------|---------|
+| `openocd_dap.cfg` | Server mode (debugging). Uses absolute paths, `reset_config none`, adapter speed 1000. |
+| `dap.cfg` | One-shot mode (flash only). CubeIDE-generated, uses SRST hardware reset. |
+
+### VS Code Tasks & Launch
+
+All configured in `.vscode/`:
+- **Ctrl+Shift+B** → `Build STM32` (default)
+- **Ctrl+Shift+P** → `Run Task` → `Flash Only` (one-shot flash, no debug)
+- **Ctrl+Shift+P** → `Run Task` → `Start OpenOCD Server` (or run: `openocd -f openocd_dap.cfg -c "init" -c "halt"`)
+- **F5** → `Flash & Debug` (compile + flash + debug; requires OpenOCD server running on port 3333)
+
+### Daily Workflow
+
+| Operation | Steps |
+|-----------|-------|
+| **Debug** | 1. Terminal: `openocd -f openocd_dap.cfg -c "init" -c "halt"` (keep running) 2. **F5** |
+| **Flash only** | Stop OpenOCD if running → **Ctrl+Shift+P** → `Run Task` → `Flash Only` |
+| **Build only** | **Ctrl+Shift+B** |
+
+### DAP Known Issues
+
+The 正点原子 DAP has USB stability issues:
+- **If flash fails** with CMSIS-DAP errors: power-cycle STM32 board + unplug/replug DAP USB, then retry.
+- **If terminal shows `WriteFile` errors**: restart OpenOCD with `-c "init" -c "halt"` (halting the CPU immediately prevents free-running noise).
+- **Never run two OpenOCD instances simultaneously** (one-shot Flash Only will fail if server is already running).
+- OpenOCD startup command: `E:\xpack-openocd-0.12.0-7\bin\openocd.exe -f openocd_dap.cfg -c "init" -c "halt"`
 
 ## Hardware Configuration
 

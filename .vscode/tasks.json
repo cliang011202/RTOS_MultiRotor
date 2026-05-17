@@ -1,0 +1,71 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build STM32",
+            "type": "shell",
+            "command": "make",
+            "args": [
+                "-C",
+                "Debug",
+                "-j",
+                "all"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": "$gcc",
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "env": {
+                    "PATH": "C:\\SysGCC\\arm-eabi\\bin;${env:PATH}"
+                }
+            }
+        },
+        {
+            "label": "Flash Only",
+            "type": "shell",
+            "command": "E:\\xpack-openocd-0.12.0-7\\bin\\openocd.exe",
+            "args": [
+                "-s", "E:/xpack-openocd-0.12.0-7/openocd/scripts",
+                "-f", "openocd_dap.cfg",
+                "-c", "init",
+                "-c", "halt",
+                "-c", "adapter speed 1000",
+                "-c", "stm32h7x unlock 0",
+                "-c", "flash erase_sector 0 0 1",
+                "-c", "flash write_image Debug/RTOS_MultiRotor.elf",
+                "-c", "verify_image Debug/RTOS_MultiRotor.elf",
+                "-c", "reset",
+                "-c", "exit"
+            ],
+            "group": "build",
+            "problemMatcher": [],
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "env": {
+                    "PATH": "C:\\SysGCC\\arm-eabi\\bin;${env:PATH}"
+                }
+            }
+        },
+        {
+            "label": "Clean STM32",
+            "type": "shell",
+            "command": "make",
+            "args": [
+                "-C",
+                "Debug",
+                "clean"
+            ],
+            "group": "build",
+            "problemMatcher": [],
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "env": {
+                    "PATH": "C:\\SysGCC\\arm-eabi\\bin;${env:PATH}"
+                }
+            }
+        }
+    ]
+}
